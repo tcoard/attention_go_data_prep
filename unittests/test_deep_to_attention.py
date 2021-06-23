@@ -1,0 +1,46 @@
+import pytest
+from .. import deep_to_attention
+from ..deep_to_attention import AA_TO_ONE_HOT
+import numpy as np
+
+
+@pytest.mark.parametrize(
+    "seq,actual_max_len,expected",
+    [
+        ("ATP", 4, np.array([AA_TO_ONE_HOT["A"], AA_TO_ONE_HOT["T"], AA_TO_ONE_HOT["P"], AA_TO_ONE_HOT["empty"]])),
+        ("bB", 2, np.array([AA_TO_ONE_HOT["X"], AA_TO_ONE_HOT["X"]])),
+    ],
+)
+def test_get_one_hot_encodings(seq: str, actual_max_len: int, expected: np.ndarray):
+    assert np.array_equal(deep_to_attention.get_one_hot_encodings(seq, actual_max_len), expected)
+
+
+@pytest.mark.parametrize(
+    "seq_annos,go_term_namespace,expected",
+    [
+        (
+            [["GO:1"], ["GO:3", "GO:2"]],
+            {"GO:1": "biological_process", "GO:2": "biological_process", "GO:3": "molecular_function"},
+            ([["GO:1"], ["GO:3", "GO:2"]], {"biological_process": ["GO:1", "GO:2"], "molecular_function": ["GO:3"]}),
+        ),
+    ],
+)
+def test_count_go_terms(seq_annos: list[list[str]], go_term_namespace: dict[str, str], expected: dict[str, list[str]]):
+    deep_to_attention.MIN_GO = 1
+    deep_to_attention.count_go_terms(seq_annos, go_term_namespace) == expected
+
+
+@pytest.mark.parametrize(
+    "seq_annos,go_counts,expected",
+    [
+        (
+            [["GO:1"], ["GO:3", "GO:2"]],
+            {"biological_process": ["GO:1", "GO:2"], "molecular_function": ["GO:3"], "cellular_component": []},
+            [np.array([True, True]), np.array([False, False]), np.array([False, True])],
+        ),
+    ],
+)
+def test_get_valid_list_index(seq_annos: list[list[str]], go_counts: dict[str, list[str]], expected: list[np.ndarray]):
+    actual = deep_to_attention.get_valid_list_index(seq_annos, go_counts)
+    for act, exp in zip(actual, expected):
+        assert np.array_equal(act, exp)
