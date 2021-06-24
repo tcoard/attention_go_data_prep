@@ -5,14 +5,32 @@ import numpy as np
 
 
 @pytest.mark.parametrize(
-    "seq,actual_max_len,expected",
+    "seq,max_len,expected",
     [
-        ("ATP", 4, np.array([AA_TO_ONE_HOT["A"], AA_TO_ONE_HOT["T"], AA_TO_ONE_HOT["P"], AA_TO_ONE_HOT["empty"]])),
-        ("bB", 2, np.array([AA_TO_ONE_HOT["X"], AA_TO_ONE_HOT["X"]])),
+        (
+            ["ATP"],
+            4,
+            np.array(np.array([[AA_TO_ONE_HOT["A"], AA_TO_ONE_HOT["T"], AA_TO_ONE_HOT["P"], AA_TO_ONE_HOT["empty"]]])),
+        ),
+        (
+            ["BB", "A"],
+            2,
+            np.array(
+                [
+                    np.array([AA_TO_ONE_HOT["X"], AA_TO_ONE_HOT["X"]]),
+                    np.array([AA_TO_ONE_HOT["A"], AA_TO_ONE_HOT["empty"]]),
+                ]
+            ),
+        ),
     ],
 )
-def test_get_one_hot_encodings(seq: str, actual_max_len: int, expected: np.ndarray):
-    assert np.array_equal(deep_to_attention.get_one_hot_encodings(seq, actual_max_len), expected)
+def test_get_one_hot_encodings(seq: str, max_len: int, expected: np.ndarray):
+    deep_to_attention.MAX_LEN = max_len
+    print("actual")
+    print(deep_to_attention.get_one_hot_encodings(seq))
+    print("expected")
+    print(expected)
+    assert np.array_equal(deep_to_attention.get_one_hot_encodings(seq), expected)
 
 
 @pytest.mark.parametrize(
@@ -31,16 +49,16 @@ def test_count_go_terms(seq_annos: list[list[str]], go_term_namespace: dict[str,
 
 
 @pytest.mark.parametrize(
-    "seq_annos,go_counts,expected",
+    "seq_annos,go_term_namespace,expected",
     [
         (
             [["GO:1"], ["GO:3", "GO:2"]],
-            {"biological_process": ["GO:1", "GO:2"], "molecular_function": ["GO:3"], "cellular_component": []},
+            {"GO:1": "biological_process", "GO:2": "biological_process", "GO:3": "molecular_function"},
             [np.array([True, True]), np.array([False, False]), np.array([False, True])],
         ),
     ],
 )
-def test_get_valid_list_index(seq_annos: list[list[str]], go_counts: dict[str, list[str]], expected: list[np.ndarray]):
-    actual = deep_to_attention.get_valid_list_index(seq_annos, go_counts)
+def test_get_valid_list_index(seq_annos: list[list[str]], go_term_namespace: dict[str, list[str]], expected: list[np.ndarray]):
+    actual = deep_to_attention.get_valid_list_index(seq_annos, go_term_namespace)
     for act, exp in zip(actual, expected):
         assert np.array_equal(act, exp)

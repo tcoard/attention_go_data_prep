@@ -1,7 +1,7 @@
 import pickle
+import resource
 import gc
 from multiprocessing import Pool
-from functools import partial
 from itertools import chain, groupby
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
@@ -14,7 +14,7 @@ MAX_LEN = 2000
 # minimum number of times a GO term has to appear in order for it to be included
 MIN_GO = 50
 
-DATA_PATH = "/home/tcoard/w/AttentionGO/local_run"
+DATA_PATH = "/home/tcoard/git/attention_go_data_prep/local_run"
 DEEPGO_DATA_PATH = "/home/tcoard/Downloads/data2016"
 OBO_FILE = f"{DEEPGO_DATA_PATH}/go.obo"
 
@@ -45,23 +45,51 @@ AA_TO_ONE_HOT = {
 }
 
 
-def get_one_hot_encodings(seq: str, actual_max_len: int) -> np.ndarray:
+def get_one_hot_encodings(seqs: list[str]) -> np.ndarray:
     """Returns an array with a one hot endcoded vector for each amino acid position in the sequence.
     If the sequence is shorter than the longest sequence,
     the difference in length is filled in with an empty vector
     """
     most_freq_aas = "ACDEFGHIKLMNPQRSTVWYX"
-    embedding = list()
-    for aa in seq:
-        aa = aa.upper()
-        aa = aa if aa in most_freq_aas else "X"
-        embedding.append(AA_TO_ONE_HOT[aa])
-    # pad the remaining positions with the empty encoding
-    embedding.extend([AA_TO_ONE_HOT["empty"]] * (actual_max_len - len(seq)))
-    return np.array(embedding, dtype="double")
+    embeddings = np.zeros([len(seqs), MAX_LEN, 21], dtype="double")
+    for i, seq in enumerate(seqs):
+        for ii, aa in enumerate(seq):
+            # aa = aa.upper()
+            aa = aa if aa in most_freq_aas else "X"
+            embeddings[i][ii][most_freq_aas.find(aa)] = 1
+    return embeddings
 
 
-def count_go_terms(seq_annos: list[list[str]], go_term_namespace: dict[str, str]) -> dict[str, list[str]]:
+# def get_one_hot_encodings(seq: str) -> np.ndarray:
+#    """Returns an array with a one hot endcoded vector for each amino acid position in the sequence.
+#    If the sequence is shorter than the longest sequence,
+#    the difference in length is filled in with an empty vector
+#    """
+#    most_freq_aas = "ACDEFGHIKLMNPQRSTVWYX"
+#    embedding = np.zeros([MAX_LEN, 21], dtype="double")
+#    for i, aa in enumerate(seq):
+#        #aa = aa.upper()
+#        aa = aa if aa in most_freq_aas else "X"
+#        embedding[i][most_freq_aas.find(aa)] = 1
+
+
+#    '''
+#    for aa in seq:
+#        #aa = aa.upper()
+#        aa = aa if aa in most_freq_aas else "X"
+#        embedding.append(AA_TO_ONE_HOT[aa])
+#    # pad the remaining positions with the empty encoding
+#    #embedding.extend([AA_TO_ONE_HOT["empty"]] * (actual_max_len - len(seq)))
+#    for _ in range(MAX_LEN - len(seq)):
+#        embedding.append(AA_TO_ONE_HOT["empty"])
+#    return np.array(embedding, dtype="double")
+#    '''
+#    return embedding
+
+
+def count_go_terms(
+    seq_annos: list[list[str]], go_term_namespace: dict[str, str]
+) -> tuple[dict[str, list[str]], list[str]]:
     """make a dictionary of {namespace: [list of go ids in that namespace]}"""
     # count how many times the GO ID appears
     go_id_counts = Counter(chain.from_iterable(seq_annos))
@@ -73,33 +101,28 @@ def count_go_terms(seq_annos: list[list[str]], go_term_namespace: dict[str, str]
     grouped_go_ids = groupby(sorted_go_ids, key=lambda value: go_term_namespace[value])
     # Create a dict of namespace to list of GO IDs
     final_go_ids = {k: sorted(list(v)) for k, v in grouped_go_ids}
-    return final_go_ids
+    return final_go_ids, sorted_go_ids
 
 
-def get_valid_list_index(seq_annos: list[list[str]], go_counts: dict[str, list[str]]) -> list[np.ndarray]:
+def get_valid_list_index(seq_annos: list[list[str]], go_term_namespace: dict[str, str]) -> list[np.ndarray]:
     """For each GO namespace, make a boolean list for if each GO term is in that namespace"""
-    valid_index_list = list()
-    bp_list = list()
-    cc_list = list()
-    mf_list = list()
-    for anno in seq_annos:
-        bp = False
-        cc = False
-        mf = False
+    bp = np.full(len(seq_annos), False)
+    cc = np.full(len(seq_annos), False)
+    mf = np.full(len(seq_annos), False)
+    for i, anno in enumerate(seq_annos):
         for go_term in anno:
-            if go_term in go_counts["biological_process"]:
-                bp = True
-            if go_term in go_counts["cellular_component"]:
-                cc = True
-            if go_term in go_counts["molecular_function"]:
-                mf = True
-        bp_list.append(bp)
-        cc_list.append(cc)
-        mf_list.append(mf)
+            namespace = go_term_namespace[go_term]
+            if namespace == "biological_process":
+                bp[i] = True
+            elif namespace == "cellular_component":
+                cc[i] = True
+            elif namespace == "molecular_function":
+                mf[i] = True
 
-    valid_index_list.append(np.array(bp_list))
-    valid_index_list.append(np.array(cc_list))
-    valid_index_list.append(np.array(mf_list))
+    valid_index_list = list()
+    valid_index_list.append(np.array(bp))
+    valid_index_list.append(np.array(cc))
+    valid_index_list.append(np.array(mf))
     return valid_index_list
 
 
@@ -121,54 +144,88 @@ def obo_to_dict() -> dict[str, str]:
     return go_namespace
 
 
-def get_seq_and_anno(dataset: Literal["train", "test"]) -> tuple[str, list[list[str]]]:
+def get_seq_and_anno(dataset: Literal["train", "test"]) -> tuple[list[str], list[list[str]]]:
     # load the train/test dataset
     with open(f"{DEEPGO_DATA_PATH}/{dataset}_data.pkl", "rb") as f:
         data = pickle.load(f)
         # filter to sequences below maximum length
         seqs = data[(data.sequences.str.len() <= MAX_LEN)]["sequences"].values.tolist()
         seq_annos = data[(data.sequences.str.len() <= MAX_LEN)]["annotations"].values.tolist()
+        del data
+        gc.collect()
         return seqs, seq_annos
+
+
+def get_test_labels(
+    seq_annos: list[list[str]], go_term_namespace: dict[str, str], go_counts: dict[str, list[str]]
+) -> list[np.ndarray]:
+    namespaces = ["biological_process", "molecular_function", "cellular_component"]
+    bp = np.zeros([len(seq_annos), len(go_counts["biological_process"])], dtype="double")
+    mf = np.zeros([len(seq_annos), len(go_counts["molecular_function"])], dtype="double")
+    cc = np.zeros([len(seq_annos), len(go_counts["cellular_component"])], dtype="double")
+    test_labels = [bp, mf, cc]
+    for i, anno in enumerate(seq_annos):
+        for go_term in anno:
+            namespace = go_term_namespace[go_term]
+            # test_labels[      namespace          ][our sequence][ go term one hot encoding position ]
+            test_labels[namespaces.index(namespace)][i][go_counts[namespace].index(go_term)] = 1
+    return test_labels
+
+
+def filter_out_unused_go_terms(
+    seqs: list[str], seq_annos: list[list[str]], go_term_namespace: dict[str, str], usable_go_ids: list[str]
+):
+    filtered_go_term_namespace = {k: v for k, v in go_term_namespace.items() if k in usable_go_ids}
+    filtered_seqs = list()
+    filtered_seq_annos = list()
+    for seq, anno in zip(seqs, seq_annos):
+        new_annos = list()
+        for go_term in anno:
+            if go_term in usable_go_ids:
+                new_annos.append(go_term)
+        if new_annos:
+            filtered_seqs.append(seq)
+            filtered_seq_annos.append(new_annos)
+    return filtered_seqs, filtered_seq_annos, filtered_go_term_namespace
 
 
 def compile_data(
     dataset: Literal["train", "test"],
     go_counts: Optional[dict[str, list[str]]] = None,
+    usable_go_ids: Optional[list[str]] = None,
     go_term_namespace: Optional[dict[str, str]] = None,
 ) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Create the train/test files to be input into AttentioGo"""
     final = dict()
     pool = Pool()
-    seqs, seq_annos = get_seq_and_anno(dataset)
-
-    final["X_test_length"] = np.array([len(seq) for seq in seqs])
-    actual_max_len = len(max(seqs, key=len))
-    print(f"{actual_max_len=}")
-    final["X_train"] = np.array(
-        pool.map(partial(get_one_hot_encodings, actual_max_len=actual_max_len), seqs), dtype="double"
-    )
-    final["y_FULL_TERM"] = np.array(seq_annos, dtype=object)
+    # this hack runs get_seq_and_anno in a new process, therefore deleting all variables when it leaves
+    # the function. If not done this way, internal references in out of scope variabels will linger
+    print("before function", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, flush=True)
+    seqs, seq_annos = pool.map(get_seq_and_anno, [dataset])[0]
 
     if go_term_namespace is None:
         go_term_namespace = obo_to_dict()
-    if go_counts is None:
-        go_counts = count_go_terms(seq_annos, go_term_namespace)
+    if go_counts is None or usable_go_ids is None:
+        go_counts, usable_go_ids = count_go_terms(seq_annos, go_term_namespace)
 
-    final["valid_index_list"] = get_valid_list_index(seq_annos, go_counts)
+    orig_seq_num = len(seqs)
+    print("starting filter", flush=True)
+    seqs, seq_annos, go_term_namespace = filter_out_unused_go_terms(seqs, seq_annos, go_term_namespace, usable_go_ids)
+    print("finished filter. Lost this many seqs: ", orig_seq_num - len(seqs), flush=True)
 
-    namespaces = ["biological_process", "molecular_function", "cellular_component"]
-    final["test_labels"] = [[], [], []]
-    for anno in seq_annos:
-        for i, namespace in enumerate(namespaces):
-            final["test_labels"][i].append(np.array([0] * len(go_counts[namespace]), dtype="double"))
-        for go_term in anno:
-            namespace = go_term_namespace[go_term]
-            # test_labels[      namespace          ][our sequence][ go term one hot encoding position ]
-            if go_term in go_counts[namespace]:
-                final["test_labels"][namespaces.index(namespace)][-1][go_counts[namespace].index(go_term)] = 1
+    final["X_test_length"] = np.array([len(seq) for seq in seqs])
+    # actual_max_len = len(max(seqs, key=len))
+    # print(f"{actual_max_len=}")
+    # final["X_train"] = np.array(pool.map(get_one_hot_encodings, seqs), dtype="double")
 
-    for i in range(len(final["test_labels"])):
-        final["test_labels"][i] = np.array(final["test_labels"][i])
+    final["X_train"] = get_one_hot_encodings(seqs)
+    final["y_FULL_TERM"] = np.array(seq_annos, dtype=object)
+    final["valid_index_list"] = get_valid_list_index(seq_annos, go_term_namespace)
+    print("after get_valid_list_index", flush=True)
+
+    final["test_labels"] = get_test_labels(seq_annos, go_term_namespace, go_counts)
+
+    print("after test_labels", flush=True)
 
     data = [
         final["X_train"],
@@ -178,7 +235,7 @@ def compile_data(
         final["valid_index_list"],
     ]
     pickle.dump(data, open(f"{DATA_PATH}/deepgo_{dataset}_data.pkl", "wb"))
-    return go_counts, go_term_namespace
+    return go_counts, usable_go_ids, go_term_namespace
 
 
 def make_go_meta_files(mt: list) -> None:
@@ -245,10 +302,11 @@ def make_meta_data(go_counts: dict[str, list[str]]) -> None:
 
 
 def main() -> None:
-    go_counts, go_term_namespace = compile_data("train")
+    go_counts, usable_go_ids, go_term_namespace = compile_data("train")
+    gc.collect()
     make_meta_data(go_counts)
     gc.collect()
-    compile_data("test", go_counts, go_term_namespace)
+    compile_data("test", go_counts, usable_go_ids, go_term_namespace)
 
 
 if __name__ == "__main__":
