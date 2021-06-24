@@ -46,7 +46,7 @@ AA_TO_ONE_HOT = {
 
 
 def get_one_hot_encodings(seqs: list[str]) -> np.ndarray:
-    """Returns an array with a one hot endcoded vector for each amino acid position in the sequence.
+    """Returns an array with a one hot endcoded vector for each amino acid position in each sequence.
     If the sequence is shorter than the longest sequence,
     the difference in length is filled in with an empty vector
     """
@@ -58,33 +58,6 @@ def get_one_hot_encodings(seqs: list[str]) -> np.ndarray:
             aa = aa if aa in most_freq_aas else "X"
             embeddings[i][ii][most_freq_aas.find(aa)] = 1
     return embeddings
-
-
-# def get_one_hot_encodings(seq: str) -> np.ndarray:
-#    """Returns an array with a one hot endcoded vector for each amino acid position in the sequence.
-#    If the sequence is shorter than the longest sequence,
-#    the difference in length is filled in with an empty vector
-#    """
-#    most_freq_aas = "ACDEFGHIKLMNPQRSTVWYX"
-#    embedding = np.zeros([MAX_LEN, 21], dtype="double")
-#    for i, aa in enumerate(seq):
-#        #aa = aa.upper()
-#        aa = aa if aa in most_freq_aas else "X"
-#        embedding[i][most_freq_aas.find(aa)] = 1
-
-
-#    '''
-#    for aa in seq:
-#        #aa = aa.upper()
-#        aa = aa if aa in most_freq_aas else "X"
-#        embedding.append(AA_TO_ONE_HOT[aa])
-#    # pad the remaining positions with the empty encoding
-#    #embedding.extend([AA_TO_ONE_HOT["empty"]] * (actual_max_len - len(seq)))
-#    for _ in range(MAX_LEN - len(seq)):
-#        embedding.append(AA_TO_ONE_HOT["empty"])
-#    return np.array(embedding, dtype="double")
-#    '''
-#    return embedding
 
 
 def count_go_terms(
@@ -145,20 +118,19 @@ def obo_to_dict() -> dict[str, str]:
 
 
 def get_seq_and_anno(dataset: Literal["train", "test"]) -> tuple[list[str], list[list[str]]]:
-    # load the train/test dataset
+    """Get the sequences and annotations for sequences less than or equal to the max length"""
     with open(f"{DEEPGO_DATA_PATH}/{dataset}_data.pkl", "rb") as f:
         data = pickle.load(f)
         # filter to sequences below maximum length
         seqs = data[(data.sequences.str.len() <= MAX_LEN)]["sequences"].values.tolist()
         seq_annos = data[(data.sequences.str.len() <= MAX_LEN)]["annotations"].values.tolist()
-        del data
-        gc.collect()
         return seqs, seq_annos
 
 
 def get_test_labels(
     seq_annos: list[list[str]], go_term_namespace: dict[str, str], go_counts: dict[str, list[str]]
 ) -> list[np.ndarray]:
+    """For each sequence, one hot encode all of the related go terms in each namespace"""
     namespaces = ["biological_process", "molecular_function", "cellular_component"]
     bp = np.zeros([len(seq_annos), len(go_counts["biological_process"])], dtype="double")
     mf = np.zeros([len(seq_annos), len(go_counts["molecular_function"])], dtype="double")
@@ -175,6 +147,8 @@ def get_test_labels(
 def filter_out_unused_go_terms(
     seqs: list[str], seq_annos: list[list[str]], go_term_namespace: dict[str, str], usable_go_ids: list[str]
 ):
+    """remove all go terms that are not in usable_go_ids. If a sequence does not have any go terms remaining,
+    remove the sequence"""
     filtered_go_term_namespace = {k: v for k, v in go_term_namespace.items() if k in usable_go_ids}
     filtered_seqs = list()
     filtered_seq_annos = list()
@@ -239,16 +213,17 @@ def compile_data(
 
 
 def make_go_meta_files(mt: list) -> None:
+    """create the _go_meta.pkl files see code below for the data structure"""
     # mt = pickle.load(open(f"{DATA_PATH}/mt_dgp.pkl", "rb"))
     for i, ns_nsid in enumerate([("bp", "GO:0008150"), ("mf", "GO:0003674"), ("cc", "GO:0005575")]):
         namespace, ns_id = ns_nsid
         ns_data = list()
         ns_data.append(ns_id)
-        ns_data.append(mt[0])  # it is possible that I need to filter this per namespace
-        ns_data.append(set(mt[i + 1]))
-        ns_data.append(mt[i + 1])
-        ns_data.append(set().union(*mt[1:]))  # all go terms?
-        ns_data.append({go_id: i for i, go_id in enumerate(mt[i + 1])})
+        ns_data.append(mt[0])  # go_namespace
+        ns_data.append(set(mt[i + 1])) # set of all go terms in namespace
+        ns_data.append(mt[i + 1]) # list of all go terms in namespace
+        ns_data.append(set().union(*mt[1:]))  # all go terms
+        ns_data.append({go_id: i for i, go_id in enumerate(mt[i + 1])}) # go_id: namespace
         pickle.dump(ns_data, open(f"{DATA_PATH}/{namespace}_go_meta.pkl", "wb"))
 
 
