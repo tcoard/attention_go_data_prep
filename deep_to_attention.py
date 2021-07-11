@@ -5,6 +5,7 @@ from multiprocessing import Pool
 from itertools import chain, groupby
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
+from functools import cache
 from typing import Literal, Optional
 import numpy as np
 
@@ -17,6 +18,9 @@ MIN_GO = 50
 DATA_PATH = "/home/tcoard/git/attention_go_data_prep/local_run"
 DEEPGO_DATA_PATH = "/home/tcoard/Downloads/data2016"
 OBO_FILE = f"{DEEPGO_DATA_PATH}/go.obo"
+
+# This is only a global variable so that it does not have to be slowly passed into a cached function
+GO_TERM_TO_PARENT = defaultdict(list)#[str, list[str]]
 
 # It was easier to debug if this was generated before the script ran, so I left it hardcoded
 AA_TO_ONE_HOT = {
@@ -168,14 +172,14 @@ def compile_data(
     go_counts: Optional[dict[str, list[str]]] = None,
     usable_go_ids: Optional[list[str]] = None,
     go_term_namespace: Optional[dict[str, str]] = None,
-) -> tuple[dict[str, list[str]], dict[str, str]]:
+) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
     """Create the train/test files to be input into AttentioGo"""
     final = dict()
-    pool = Pool()
-    # this hack runs get_seq_and_anno in a new process, therefore deleting all variables when it leaves
-    # the function. If not done this way, internal references in out of scope variabels will linger
-    print("before function", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, flush=True)
-    seqs, seq_annos = pool.map(get_seq_and_anno, [dataset])[0]
+    with Pool() as pool:
+        # this hack runs get_seq_and_anno in a new process, therefore deleting all variables when it leaves
+        # the function. If not done this way, internal references in out of scope variabels will linger
+        print("before function", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, flush=True)
+        seqs, seq_annos = pool.map(get_seq_and_anno, [dataset])[0]
 
     if go_term_namespace is None:
         go_term_namespace = obo_to_dict()
@@ -227,6 +231,20 @@ def make_go_meta_files(mt: list) -> None:
         pickle.dump(ns_data, open(f"{DATA_PATH}/{namespace}_go_meta.pkl", "wb"))
 
 
+
+
+@cache
+def get_ancestors(go_term: str) -> list[str]:
+    if parents := GO_TERM_TO_PARENT.get(go_term):
+        ancestors = [go_term]
+        for parent in parents:
+            ancestors += get_ancestors(parent)
+        return ancestors
+    return [] # we don't want the head node
+
+
+
+
 def make_meta_data(go_counts: dict[str, list[str]]) -> None:
     """create MT_dgp.pkl file, which is a dictionary with GO data and relationships"""
 
@@ -252,8 +270,11 @@ def make_meta_data(go_counts: dict[str, list[str]]) -> None:
             elif line.startswith("name:"):
                 go_namespace[go_id].name = (" ").join(line.split(" ")[1:])
             elif line.startswith("is_a:"):
+                # or download the go.basic and https://github.com/tanghaibao/goatools
+                # needs to recursively go all the way up the go hierarchy
                 parent_id = line.split(" ")[1]
-                go_namespace[go_id].is_a.append(parent_id)
+                GO_TERM_TO_PARENT[go_id].append(parent_id)
+                # go_namespace[go_id].is_a.append(parent_id)
                 go_namespace[parent_id].children.add(go_id)
             elif line.startswith("relationship:"):
                 line_elems = line.split(" ")
@@ -265,6 +286,11 @@ def make_meta_data(go_counts: dict[str, list[str]]) -> None:
                 if line.split(" ")[1] == "true":
                     go_namespace[go_id].is_obsolete = True
 
+    for go_id in go_namespace:
+        ancestors = get_ancestors(go_id)[1:]
+        go_namespace[go_id].is_a = ancestors
+
+    go_namespace[go_id].is_a.append(parent_id)
     go_namespace = {k: asdict(v) for k, v in go_namespace.items()}
     mt = [
         go_namespace,
