@@ -54,7 +54,7 @@ def test_count_go_terms(seq_annos: list[list[str]], go_term_namespace: dict[str,
         (
             [["GO:1"], ["GO:3", "GO:2"]],
             {"GO:1": "biological_process", "GO:2": "biological_process", "GO:3": "molecular_function"},
-            [np.array([True, True]), np.array([False, False]), np.array([False, True])],
+            [np.array([True, True]), np.array([False, True]), np.array([False, False])],
         ),
     ],
 )

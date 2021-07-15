@@ -98,8 +98,8 @@ def get_valid_list_index(seq_annos: list[list[str]], go_term_namespace: dict[str
 
     valid_index_list = list()
     valid_index_list.append(np.array(bp))
-    valid_index_list.append(np.array(cc))
     valid_index_list.append(np.array(mf))
+    valid_index_list.append(np.array(cc))
     return valid_index_list
 
 
@@ -231,8 +231,6 @@ def make_go_meta_files(mt: list) -> None:
         pickle.dump(ns_data, open(f"{DATA_PATH}/{namespace}_go_meta.pkl", "wb"))
 
 
-
-
 @cache
 def get_ancestors(go_term: str) -> list[str]:
     if parents := GO_TERM_TO_PARENT.get(go_term):
@@ -241,8 +239,6 @@ def get_ancestors(go_term: str) -> list[str]:
             ancestors += get_ancestors(parent)
         return ancestors
     return [] # we don't want the head node
-
-
 
 
 def make_meta_data(go_counts: dict[str, list[str]]) -> None:
@@ -287,10 +283,10 @@ def make_meta_data(go_counts: dict[str, list[str]]) -> None:
                     go_namespace[go_id].is_obsolete = True
 
     for go_id in go_namespace:
-        ancestors = get_ancestors(go_id)[1:]
+        ancestors = sorted(set(get_ancestors(go_id)[1:]))
         go_namespace[go_id].is_a = ancestors
 
-    go_namespace[go_id].is_a.append(parent_id)
+
     go_namespace = {k: asdict(v) for k, v in go_namespace.items()}
     mt = [
         go_namespace,
